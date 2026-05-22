@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use serenity::all::{
-    ActivityType, Client, Context, EventHandler, GatewayIntents, Member, Presence, Ready,
-    ResumedEvent, User,
+    ActivityType, Client, Context, EventHandler, GatewayIntents, Guild, Member, Presence, Ready,
+    ResumedEvent, UnavailableGuild, User,
 };
 use serenity::async_trait;
 use serenity::http::Http as SerenityHttp;
@@ -25,6 +25,38 @@ impl EventHandler for Handler {
 
     async fn resume(&self, _ctx: Context, _: ResumedEvent) {
         info!("discord gateway resumed");
+    }
+
+    async fn guild_create(&self, ctx: Context, guild: Guild, _is_new: Option<bool>) {
+        if guild.id == self.guild_id {
+            return;
+        }
+        // The bot should only ever live in the configured guild. If we end up
+        // anywhere else (someone invited the bot to their server), leave
+        // immediately so we don't broadcast or cache data for users outside
+        // our scope and don't spend compute on guilds we don't intend to serve.
+        warn!(
+            guild_id = %guild.id,
+            guild_name = %guild.name,
+            "joined unconfigured guild, leaving"
+        );
+        if let Err(err) = ctx.http.leave_guild(guild.id).await {
+            warn!(?err, guild_id = %guild.id, "failed to leave unconfigured guild");
+        }
+    }
+
+    async fn guild_delete(
+        &self,
+        _ctx: Context,
+        incomplete: UnavailableGuild,
+        _full: Option<Guild>,
+    ) {
+        if incomplete.id == self.guild_id && !incomplete.unavailable {
+            warn!(
+                guild_id = %incomplete.id,
+                "bot removed from configured guild — membership cache will lazy-refill"
+            );
+        }
     }
 
     async fn guild_member_addition(&self, _ctx: Context, new_member: Member) {
