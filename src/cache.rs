@@ -20,10 +20,7 @@ use tokio::sync::OnceCell;
 use tracing::{info, warn};
 
 use crate::PresenceData;
-use crate::consts::{
-    MEMBERSHIP_NEGATIVE_TTL_MS, MEMBERSHIP_NEGATIVE_TTL_SECS, MEMBERSHIP_POSITIVE_TTL_MS,
-    MEMBERSHIP_POSITIVE_TTL_SECS, PRESENCE_CACHE_TTL_SECS, REDIS_BOOTSTRAP_RETRY,
-};
+use crate::consts::{redis_boot, ttl};
 
 static REDIS_CLIENT: OnceCell<Option<ConnectionManager>> = OnceCell::const_new();
 
@@ -121,9 +118,9 @@ struct MembershipEntry {
 impl MembershipEntry {
     fn ttl_ms(self) -> i64 {
         if self.in_server {
-            MEMBERSHIP_POSITIVE_TTL_MS
+            ttl::MEMBERSHIP_POSITIVE_MS
         } else {
-            MEMBERSHIP_NEGATIVE_TTL_MS
+            ttl::MEMBERSHIP_NEGATIVE_MS
         }
     }
 
@@ -159,7 +156,7 @@ impl Cache {
     pub async fn set(&self, user_id: &str, data: &PresenceData) {
         let key = presence_key(user_id);
         if let Ok(json) = serde_json::to_string(data) {
-            redis_set_ex(&key, &json, PRESENCE_CACHE_TTL_SECS).await;
+            redis_set_ex(&key, &json, ttl::PRESENCE_SECS).await;
         }
         self.memory_presence
             .insert(user_id.to_string(), data.clone());
@@ -183,9 +180,9 @@ impl Cache {
 
     pub async fn set_membership(&self, user_id: &str, in_server: bool) {
         let ttl_secs = if in_server {
-            MEMBERSHIP_POSITIVE_TTL_SECS
+            ttl::MEMBERSHIP_POSITIVE_SECS
         } else {
-            MEMBERSHIP_NEGATIVE_TTL_SECS
+            ttl::MEMBERSHIP_NEGATIVE_SECS
         };
         let value = if in_server { "1" } else { "0" };
         redis_set_ex(&membership_key(user_id), value, ttl_secs).await;
@@ -224,7 +221,7 @@ pub async fn wait_for_redis(timeout: Duration) -> bool {
         if init_redis().await {
             return true;
         }
-        tokio::time::sleep(REDIS_BOOTSTRAP_RETRY).await;
+        tokio::time::sleep(redis_boot::RETRY).await;
     }
     false
 }
