@@ -1,7 +1,8 @@
 use std::time::Duration;
 
 use serenity::all::{
-    ActivityType, Client, Context, EventHandler, GatewayIntents, Presence, Ready, ResumedEvent,
+    ActivityType, Client, Context, EventHandler, GatewayIntents, Member, Presence, Ready,
+    ResumedEvent, User,
 };
 use serenity::async_trait;
 use serenity::http::Http as SerenityHttp;
@@ -13,6 +14,7 @@ use crate::{PresenceCache, PresenceData, SpotifyActivity, UserWatchers};
 pub struct Handler {
     pub cache: PresenceCache,
     pub watchers: UserWatchers,
+    pub guild_id: GuildId,
 }
 
 #[async_trait]
@@ -25,13 +27,32 @@ impl EventHandler for Handler {
         info!("discord gateway resumed");
     }
 
+    async fn guild_member_addition(&self, _ctx: Context, new_member: Member) {
+        if new_member.guild_id != self.guild_id {
+            return;
+        }
+        let user_id = new_member.user.id.to_string();
+        debug!(user_id = %user_id, "guild_member_addition");
+        self.cache.set_membership(&user_id, true).await;
+    }
+
+    async fn guild_member_removal(
+        &self,
+        _ctx: Context,
+        guild_id: GuildId,
+        user: User,
+        _member_data_if_available: Option<Member>,
+    ) {
+        if guild_id != self.guild_id {
+            return;
+        }
+        let user_id = user.id.to_string();
+        debug!(user_id = %user_id, "guild_member_removal");
+        self.cache.set_membership(&user_id, false).await;
+    }
+
     async fn presence_update(&self, _ctx: Context, new: Presence) {
         let user_id = new.user.id.to_string();
-
-        let watcher = match self.watchers.get(&user_id) {
-            Some(w) => w,
-            None => return,
-        };
 
         let raw_spotify_activity = new
             .activities
@@ -72,15 +93,26 @@ impl EventHandler for Handler {
             timestamp_ms: chrono::Utc::now().timestamp_millis(),
         };
 
-        if watcher.send(Some(presence.clone())).is_ok() {
-            self.cache.set(&user_id, &presence).await;
+        // Cache every presence update so the REST snapshot works without an
+        // active websocket subscriber.
+        self.cache.set(&user_id, &presence).await;
+
+        // Receiving a presence update is also positive proof the user is in
+        // the guild — refresh the membership cache opportunistically.
+        if new.guild_id == Some(self.guild_id) {
+            self.cache.set_membership(&user_id, true).await;
+        }
+
+        if let Some(watcher) = self.watchers.get(&user_id) {
+            let _ = watcher.send(Some(presence));
         }
     }
 }
 
-pub async fn start_discord(cache: PresenceCache, watchers: UserWatchers) -> ! {
+pub async fn start_discord(cache: PresenceCache, watchers: UserWatchers, guild_id: GuildId) -> ! {
     let token = std::env::var("DISCORD_BOT_TOKEN").expect("DISCORD_BOT_TOKEN not set");
-    let intents = GatewayIntents::GUILDS | GatewayIntents::GUILD_PRESENCES;
+    let intents =
+        GatewayIntents::GUILDS | GatewayIntents::GUILD_MEMBERS | GatewayIntents::GUILD_PRESENCES;
 
     let mut attempt: u32 = 0;
 
@@ -88,6 +120,7 @@ pub async fn start_discord(cache: PresenceCache, watchers: UserWatchers) -> ! {
         let handler = Handler {
             cache: cache.clone(),
             watchers: watchers.clone(),
+            guild_id,
         };
 
         match Client::builder(&token, intents)

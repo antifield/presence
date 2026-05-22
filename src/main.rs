@@ -81,6 +81,20 @@ async fn get_presence_handler(user_id: String, state: AppState) -> Result<impl R
 }
 
 async fn user_in_server_handler(user_id: String, state: AppState) -> Result<impl Reply, Rejection> {
+    if !validate_user_id(&user_id) {
+        return Ok(warp::reply::with_status(
+            warp::reply::json(&serde_json::json!({ "error": "invalid user id" })),
+            StatusCode::BAD_REQUEST,
+        ));
+    }
+
+    if let Some(in_server) = state.cache.get_membership(&user_id).await {
+        return Ok(warp::reply::with_status(
+            warp::reply::json(&serde_json::json!({ "in_server": in_server })),
+            StatusCode::OK,
+        ));
+    }
+
     let uid = match user_id.parse::<u64>() {
         Ok(v) => v,
         Err(_) => {
@@ -92,10 +106,13 @@ async fn user_in_server_handler(user_id: String, state: AppState) -> Result<impl
     };
 
     match discord::is_member(&state.http, state.guild_id, uid).await {
-        Ok(in_server) => Ok(warp::reply::with_status(
-            warp::reply::json(&serde_json::json!({ "in_server": in_server })),
-            StatusCode::OK,
-        )),
+        Ok(in_server) => {
+            state.cache.set_membership(&user_id, in_server).await;
+            Ok(warp::reply::with_status(
+                warp::reply::json(&serde_json::json!({ "in_server": in_server })),
+                StatusCode::OK,
+            ))
+        }
         Err(e) => Ok(warp::reply::with_status(
             warp::reply::json(&serde_json::json!({ "error": e })),
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -148,7 +165,6 @@ fn try_acquire_connection(connections: &ConnectionCounter, ip: IpAddr) -> Option
 
 struct WatcherGuard {
     watchers: UserWatchers,
-    memory_cache: Arc<DashMap<String, PresenceData>>,
     user_id: String,
 }
 
@@ -159,7 +175,6 @@ impl Drop for WatcherGuard {
         {
             drop(watcher);
             self.watchers.remove(&self.user_id);
-            self.memory_cache.remove(&self.user_id);
         }
     }
 }
@@ -180,7 +195,6 @@ async fn ws_handler(ws: WebSocket, user_id: String, state: AppState, _conn_guard
 
     let _watcher_guard = WatcherGuard {
         watchers: state.watchers.clone(),
-        memory_cache: state.cache.get_memory(),
         user_id: user_id.clone(),
     };
 
@@ -333,6 +347,7 @@ async fn main() {
     tokio::spawn(discord::start_discord(
         state.cache.clone(),
         state.watchers.clone(),
+        state.guild_id,
     ));
     warp::serve(routes).run(([0, 0, 0, 0], 8787)).await;
 }

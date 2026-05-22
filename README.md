@@ -9,8 +9,8 @@ Presence is a service for getting the current Spotify/Listening status of users 
 ## Endpoints
 
 - WebSocket stream: `WS /ws/v1/{DISCORD_USER_ID}` (personally use `websocat` to test in dev)
-- REST snapshot: `GET /v1/{DISCORD_USER_ID}` (only works with pre-existing websocket subscriber, this is intentional by design)
-- Check if user in server: `GET /v1/{DISCORD_USER_ID}/in_server`
+- REST snapshot: `GET /v1/{DISCORD_USER_ID}` (returns the latest cached presence, served from Redis whenever the gateway has seen the user)
+- Check if user in server: `GET /v1/{DISCORD_USER_ID}/in_server` (served from Redis; falls back to the Discord REST API on cache miss and writes the result back through)
 - Health: `GET /health`
 
 ## Usage
@@ -45,6 +45,11 @@ cp .env.example .env
 ### Caching
 
 Presence uses Redis for caching with automatic fallback to in-memory if Redis is unavailable. On startup, the app waits up to 10 seconds for Redis before falling back.
+
+Two things are cached:
+
+- **Spotify presence** (`presence:{user_id}`, 5 minute TTL) — populated from gateway `presence_update` events. The REST snapshot endpoint works without an active WebSocket subscriber.
+- **Guild membership** (`in_server:{user_id}`) — positive entries kept for 6 hours, negative entries for 5 minutes. Maintained in real-time by the `GUILD_MEMBERS` gateway events (`guild_member_addition` / `guild_member_removal`); a cache miss falls back to a single Discord REST lookup and writes the result back. The bot needs both the `GUILD_MEMBERS` and `GUILD_PRESENCES` privileged intents enabled in the Discord developer portal.
 
 Check `/health` to see current Redis status:
 ```json
