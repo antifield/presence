@@ -52,6 +52,13 @@ impl EventHandler for Handler {
     }
 
     async fn presence_update(&self, _ctx: Context, new: Presence) {
+        // Discord delivers presence updates for every guild the bot is in.
+        // Ignore anything outside the configured guild so we never cache or
+        // broadcast out-of-scope presence data.
+        if new.guild_id != Some(self.guild_id) {
+            return;
+        }
+
         let user_id = new.user.id.to_string();
 
         let raw_spotify_activity = new
@@ -97,11 +104,9 @@ impl EventHandler for Handler {
         // active websocket subscriber.
         self.cache.set(&user_id, &presence).await;
 
-        // Receiving a presence update is also positive proof the user is in
-        // the guild — refresh the membership cache opportunistically.
-        if new.guild_id == Some(self.guild_id) {
-            self.cache.set_membership(&user_id, true).await;
-        }
+        // Receiving a presence update is positive proof the user is in the
+        // guild — refresh the membership cache opportunistically.
+        self.cache.set_membership(&user_id, true).await;
 
         if let Some(watcher) = self.watchers.get(&user_id) {
             let _ = watcher.send(Some(presence));
