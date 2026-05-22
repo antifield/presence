@@ -8,10 +8,12 @@ use serde::{Deserialize, Serialize};
 use serenity::http::Http as SerenityHttp;
 use serenity::model::id::GuildId;
 use tokio::sync::watch;
-use tokio::time::{Duration, Instant, interval_at, timeout};
+use tokio::time::{Instant, interval_at, timeout};
 use tracing::{info, warn};
 use warp::ws::{Message, WebSocket, Ws};
 use warp::{Filter, Rejection, Reply, http::StatusCode};
+
+use crate::consts::{discord as discord_defaults, http as http_cfg, redis_boot, ttl, ws};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpotifyActivity {
@@ -30,12 +32,7 @@ pub struct PresenceData {
     pub timestamp_ms: i64,
 }
 
-const PRESENCE_TTL_MINUTES: i64 = 5;
-const PRESENCE_TTL_MS: i64 = PRESENCE_TTL_MINUTES * 60 * 1000;
-const MAX_CONNECTIONS_PER_IP: usize = 10;
-const WS_SEND_TIMEOUT: Duration = Duration::from_secs(5);
-
-pub type PresenceCache = Arc<redis::Cache>;
+pub type PresenceCache = Arc<cache::Cache>;
 pub type UserWatchers = Arc<DashMap<String, watch::Sender<Option<PresenceData>>>>;
 type ConnectionCounter = Arc<DashMap<IpAddr, usize>>;
 
@@ -50,7 +47,7 @@ struct AppState {
 
 fn is_presence_stale(presence: &PresenceData) -> bool {
     let now = chrono::Utc::now().timestamp_millis();
-    now - presence.timestamp_ms > PRESENCE_TTL_MS
+    now - presence.timestamp_ms > ttl::PRESENCE_MS
 }
 
 fn validate_user_id(user_id: &str) -> bool {
@@ -81,6 +78,20 @@ async fn get_presence_handler(user_id: String, state: AppState) -> Result<impl R
 }
 
 async fn user_in_server_handler(user_id: String, state: AppState) -> Result<impl Reply, Rejection> {
+    if !validate_user_id(&user_id) {
+        return Ok(warp::reply::with_status(
+            warp::reply::json(&serde_json::json!({ "error": "invalid user id" })),
+            StatusCode::BAD_REQUEST,
+        ));
+    }
+
+    if let Some(in_server) = state.cache.get_membership(&user_id).await {
+        return Ok(warp::reply::with_status(
+            warp::reply::json(&serde_json::json!({ "in_server": in_server })),
+            StatusCode::OK,
+        ));
+    }
+
     let uid = match user_id.parse::<u64>() {
         Ok(v) => v,
         Err(_) => {
@@ -92,10 +103,13 @@ async fn user_in_server_handler(user_id: String, state: AppState) -> Result<impl
     };
 
     match discord::is_member(&state.http, state.guild_id, uid).await {
-        Ok(in_server) => Ok(warp::reply::with_status(
-            warp::reply::json(&serde_json::json!({ "in_server": in_server })),
-            StatusCode::OK,
-        )),
+        Ok(in_server) => {
+            state.cache.set_membership(&user_id, in_server).await;
+            Ok(warp::reply::with_status(
+                warp::reply::json(&serde_json::json!({ "in_server": in_server })),
+                StatusCode::OK,
+            ))
+        }
         Err(e) => Ok(warp::reply::with_status(
             warp::reply::json(&serde_json::json!({ "error": e })),
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -134,7 +148,7 @@ impl Drop for ConnectionGuard {
 
 fn try_acquire_connection(connections: &ConnectionCounter, ip: IpAddr) -> Option<ConnectionGuard> {
     let mut entry = connections.entry(ip).or_insert(0);
-    if *entry >= MAX_CONNECTIONS_PER_IP {
+    if *entry >= http_cfg::MAX_CONNECTIONS_PER_IP {
         return None;
     }
     *entry += 1;
@@ -148,7 +162,6 @@ fn try_acquire_connection(connections: &ConnectionCounter, ip: IpAddr) -> Option
 
 struct WatcherGuard {
     watchers: UserWatchers,
-    memory_cache: Arc<DashMap<String, PresenceData>>,
     user_id: String,
 }
 
@@ -159,7 +172,6 @@ impl Drop for WatcherGuard {
         {
             drop(watcher);
             self.watchers.remove(&self.user_id);
-            self.memory_cache.remove(&self.user_id);
         }
     }
 }
@@ -168,7 +180,7 @@ async fn ws_send_with_timeout(
     ws_tx: &mut futures_util::stream::SplitSink<WebSocket, Message>,
     msg: Message,
 ) -> bool {
-    matches!(timeout(WS_SEND_TIMEOUT, ws_tx.send(msg)).await, Ok(Ok(_)))
+    matches!(timeout(ws::SEND_TIMEOUT, ws_tx.send(msg)).await, Ok(Ok(_)))
 }
 
 async fn ws_handler(ws: WebSocket, user_id: String, state: AppState, _conn_guard: ConnectionGuard) {
@@ -180,7 +192,6 @@ async fn ws_handler(ws: WebSocket, user_id: String, state: AppState, _conn_guard
 
     let _watcher_guard = WatcherGuard {
         watchers: state.watchers.clone(),
-        memory_cache: state.cache.get_memory(),
         user_id: user_id.clone(),
     };
 
@@ -201,10 +212,7 @@ async fn ws_loop(
     ws_rx: &mut futures_util::stream::SplitStream<WebSocket>,
     mut rx: watch::Receiver<Option<PresenceData>>,
 ) {
-    let mut ping_interval = interval_at(
-        Instant::now() + Duration::from_secs(25),
-        Duration::from_secs(25),
-    );
+    let mut ping_interval = interval_at(Instant::now() + ws::PING_INTERVAL, ws::PING_INTERVAL);
 
     loop {
         tokio::select! {
@@ -242,8 +250,9 @@ async fn ws_loop(
     }
 }
 
+mod cache;
+mod consts;
 mod discord;
-mod redis;
 
 #[tokio::main]
 async fn main() {
@@ -252,19 +261,16 @@ async fn main() {
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     tracing_subscriber::fmt().with_env_filter(env_filter).init();
 
-    let redis_available = redis::wait_for_redis(Duration::from_secs(10)).await;
+    let redis_available = cache::wait_for_redis(redis_boot::TIMEOUT).await;
     if !redis_available {
         warn!("redis not available after 10s, using in-memory cache");
     }
 
     let token = std::env::var("DISCORD_BOT_TOKEN").expect("DISCORD_BOT_TOKEN not set");
-    let guild_id: u64 = std::env::var("GUILD_ID")
-        .expect("GUILD_ID not set")
-        .parse()
-        .expect("GUILD_ID must be a valid u64");
+    let guild_id: u64 = resolve_guild_id();
 
     let http = Arc::new(SerenityHttp::new(&token));
-    let cache = Arc::new(redis::Cache::new());
+    let cache = Arc::new(cache::Cache::new());
     let watchers: UserWatchers = Arc::new(DashMap::new());
     let connections: ConnectionCounter = Arc::new(DashMap::new());
 
@@ -318,7 +324,7 @@ async fn main() {
     let health_route = warp::path!("health").and(warp::get()).map(|| {
         warp::reply::json(&serde_json::json!({
             "status": "ok",
-            "redis": redis::is_redis_available()
+            "redis": cache::is_redis_available()
         }))
     });
 
@@ -329,10 +335,27 @@ async fn main() {
         .or(ws_route)
         .with(warp::cors().allow_any_origin());
 
-    info!("starting http server on 0.0.0.0:8787");
+    info!(
+        host = ?http_cfg::LISTEN_HOST,
+        port = http_cfg::LISTEN_PORT,
+        "starting http server"
+    );
     tokio::spawn(discord::start_discord(
         state.cache.clone(),
         state.watchers.clone(),
+        state.guild_id,
     ));
-    warp::serve(routes).run(([0, 0, 0, 0], 8787)).await;
+    warp::serve(routes)
+        .run((http_cfg::LISTEN_HOST, http_cfg::LISTEN_PORT))
+        .await;
+}
+
+/// Resolve the configured guild id from `GUILD_ID`, falling back to
+/// [`discord_defaults::DEFAULT_GUILD_ID`] (set in [`crate::consts`]).
+fn resolve_guild_id() -> u64 {
+    match std::env::var("GUILD_ID") {
+        Ok(s) => s.parse().expect("GUILD_ID must be a valid u64"),
+        Err(_) => discord_defaults::DEFAULT_GUILD_ID
+            .expect("GUILD_ID not set and no DEFAULT_GUILD_ID compiled in"),
+    }
 }
