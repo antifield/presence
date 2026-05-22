@@ -8,10 +8,15 @@ use serde::{Deserialize, Serialize};
 use serenity::http::Http as SerenityHttp;
 use serenity::model::id::GuildId;
 use tokio::sync::watch;
-use tokio::time::{Duration, Instant, interval_at, timeout};
+use tokio::time::{Instant, interval_at, timeout};
 use tracing::{info, warn};
 use warp::ws::{Message, WebSocket, Ws};
 use warp::{Filter, Rejection, Reply, http::StatusCode};
+
+use crate::consts::{
+    DEFAULT_GUILD_ID, LISTEN_HOST, LISTEN_PORT, MAX_CONNECTIONS_PER_IP, PRESENCE_TTL_MS,
+    REDIS_BOOTSTRAP_TIMEOUT, WS_PING_INTERVAL, WS_SEND_TIMEOUT,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpotifyActivity {
@@ -30,12 +35,7 @@ pub struct PresenceData {
     pub timestamp_ms: i64,
 }
 
-const PRESENCE_TTL_MINUTES: i64 = 5;
-const PRESENCE_TTL_MS: i64 = PRESENCE_TTL_MINUTES * 60 * 1000;
-const MAX_CONNECTIONS_PER_IP: usize = 10;
-const WS_SEND_TIMEOUT: Duration = Duration::from_secs(5);
-
-pub type PresenceCache = Arc<redis::Cache>;
+pub type PresenceCache = Arc<cache::Cache>;
 pub type UserWatchers = Arc<DashMap<String, watch::Sender<Option<PresenceData>>>>;
 type ConnectionCounter = Arc<DashMap<IpAddr, usize>>;
 
@@ -215,10 +215,7 @@ async fn ws_loop(
     ws_rx: &mut futures_util::stream::SplitStream<WebSocket>,
     mut rx: watch::Receiver<Option<PresenceData>>,
 ) {
-    let mut ping_interval = interval_at(
-        Instant::now() + Duration::from_secs(25),
-        Duration::from_secs(25),
-    );
+    let mut ping_interval = interval_at(Instant::now() + WS_PING_INTERVAL, WS_PING_INTERVAL);
 
     loop {
         tokio::select! {
@@ -256,8 +253,9 @@ async fn ws_loop(
     }
 }
 
+mod cache;
+mod consts;
 mod discord;
-mod redis;
 
 #[tokio::main]
 async fn main() {
@@ -266,19 +264,16 @@ async fn main() {
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     tracing_subscriber::fmt().with_env_filter(env_filter).init();
 
-    let redis_available = redis::wait_for_redis(Duration::from_secs(10)).await;
+    let redis_available = cache::wait_for_redis(REDIS_BOOTSTRAP_TIMEOUT).await;
     if !redis_available {
         warn!("redis not available after 10s, using in-memory cache");
     }
 
     let token = std::env::var("DISCORD_BOT_TOKEN").expect("DISCORD_BOT_TOKEN not set");
-    let guild_id: u64 = std::env::var("GUILD_ID")
-        .expect("GUILD_ID not set")
-        .parse()
-        .expect("GUILD_ID must be a valid u64");
+    let guild_id: u64 = resolve_guild_id();
 
     let http = Arc::new(SerenityHttp::new(&token));
-    let cache = Arc::new(redis::Cache::new());
+    let cache = Arc::new(cache::Cache::new());
     let watchers: UserWatchers = Arc::new(DashMap::new());
     let connections: ConnectionCounter = Arc::new(DashMap::new());
 
@@ -332,7 +327,7 @@ async fn main() {
     let health_route = warp::path!("health").and(warp::get()).map(|| {
         warp::reply::json(&serde_json::json!({
             "status": "ok",
-            "redis": redis::is_redis_available()
+            "redis": cache::is_redis_available()
         }))
     });
 
@@ -343,11 +338,20 @@ async fn main() {
         .or(ws_route)
         .with(warp::cors().allow_any_origin());
 
-    info!("starting http server on 0.0.0.0:8787");
+    info!(host = ?LISTEN_HOST, port = LISTEN_PORT, "starting http server");
     tokio::spawn(discord::start_discord(
         state.cache.clone(),
         state.watchers.clone(),
         state.guild_id,
     ));
-    warp::serve(routes).run(([0, 0, 0, 0], 8787)).await;
+    warp::serve(routes).run((LISTEN_HOST, LISTEN_PORT)).await;
+}
+
+/// Resolve the configured guild id from `GUILD_ID`, falling back to
+/// [`DEFAULT_GUILD_ID`] when set in [`crate::consts`].
+fn resolve_guild_id() -> u64 {
+    match std::env::var("GUILD_ID") {
+        Ok(s) => s.parse().expect("GUILD_ID must be a valid u64"),
+        Err(_) => DEFAULT_GUILD_ID.expect("GUILD_ID not set and no DEFAULT_GUILD_ID compiled in"),
+    }
 }
