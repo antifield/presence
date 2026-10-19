@@ -74,6 +74,8 @@ Every field of a listening activity is chosen by the member who publishes it: an
 
 Clients should still treat `listening` as untrusted plain text: render it with `textContent` (never as HTML) and restrict `img-src` to the three hosts above.
 
+Presence is deliberately a thin microservice and does no content moderation. It won't catch NSFW covers, offensive or misleading track and artist names, or text written to get past word filters. If you run Presence yourself or embed its output, that filtering is your responsibility, in the service that displays it.
+
 ## Development
 
 ```bash
