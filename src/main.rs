@@ -15,12 +15,28 @@ use warp::{Filter, Rejection, Reply, http::StatusCode};
 
 use crate::consts::{discord as discord_defaults, http as http_cfg, redis_boot, ttl, ws};
 
+/// Where a listening activity comes from. Anything not recognised yet is
+/// reported as `other`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ListeningSource {
+    Spotify,
+    Soundcloud,
+    Other,
+}
+
+/// Whatever the user is listening to, from any source that reports a Discord
+/// "Listening to" activity (Spotify, SoundCloud via PreMiD, ...).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SpotifyActivity {
+pub struct ListeningActivity {
+    pub source: ListeningSource,
+    pub application_id: Option<String>,
     pub track: Option<String>,
     pub artist: Option<String>,
     pub album: Option<String>,
-    pub album_art_url: Option<String>,
+    pub art_url: Option<String>,
+    pub track_id: Option<String>,
+    pub url: Option<String>,
     pub started_at_ms: Option<i64>,
     pub ends_at_ms: Option<i64>,
 }
@@ -28,7 +44,7 @@ pub struct SpotifyActivity {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PresenceData {
     pub user_id: String,
-    pub spotify: Option<SpotifyActivity>,
+    pub listening: Option<ListeningActivity>,
     pub timestamp_ms: i64,
 }
 
@@ -253,6 +269,7 @@ async fn ws_loop(
 mod cache;
 mod consts;
 mod discord;
+mod listening;
 
 #[tokio::main]
 async fn main() {

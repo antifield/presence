@@ -42,6 +42,12 @@ pub mod ws {
     pub const PING_INTERVAL: Duration = Duration::from_secs(25);
 }
 
+/// Limits on what a listening activity may carry.
+pub mod listening {
+    /// Cap on track, artist and album text, matching Discord's own limit.
+    pub const MAX_TEXT_CHARS: usize = 128;
+}
+
 /// Redis bootstrap behaviour at startup.
 pub mod redis_boot {
     use super::Duration;

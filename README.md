@@ -17,20 +17,64 @@ Presence is a service for getting the current Spotify/Listening status of users 
 
 ### Response
 
+The REST snapshot and every WebSocket frame share this shape:
+
 ```json
 {
   "user_id": "492731761680187403",
-  "spotify": {
+  "listening": {
+    "source": "spotify",
+    "application_id": null,
     "track": "A Shoulder to Cry On",
     "artist": "Dance Gavin Dance",
     "album": "Pantheon",
-    "album_art_url": "https://i.scdn.co/image/ab67616d0000b273bb86aa29f862c224e21b96d8",
+    "art_url": "https://i.scdn.co/image/ab67616d0000b273bb86aa29f862c224e21b96d8",
+    "track_id": "049iW2TiA4H0NnGvVMibOh",
+    "url": "https://open.spotify.com/track/049iW2TiA4H0NnGvVMibOh",
     "started_at_ms": 1766447419972,
     "ends_at_ms": 1766447701646
   },
   "timestamp_ms": 1766447420190
 }
 ```
+
+`listening` is `null` when the user isn't listening to anything.
+
+#### `listening`
+
+Built from the user's Discord "Listening to" activity (type 2), whichever app reports it: Spotify, SoundCloud through PreMiD, and so on. If there are several, Discord's own Spotify activity wins, then the one that started most recently.
+
+| Field | Value |
+| --- | --- |
+| `source` | `"spotify"` (Discord's own Spotify activity), `"soundcloud"`, or `"other"` for any app not recognised yet |
+| `application_id` | The Discord application behind the activity, or `null` (Spotify has none) |
+| `track` / `artist` | The activity's `details` / `state`, cleaned (see below), or `null` |
+| `album` | `assets.large_text`, cleaned, or `null` |
+| `art_url` | Cover image URL, see below, or `null` |
+| `track_id` | Spotify only: the Spotify track id (`sync_id`); otherwise `null` |
+| `url` | Spotify only: `https://open.spotify.com/track/<track_id>`; otherwise `null` |
+| `started_at_ms` / `ends_at_ms` | Activity timestamps, or `null` |
+
+`art_url` is built from `assets.large_image` by prefix (the service never fetches or proxies images):
+
+| `large_image` | `art_url` |
+| --- | --- |
+| `spotify:<40 hex>` | `https://i.scdn.co/image/<id>` |
+| `mp:<path>` | `https://media.discordapp.net/<path>` |
+| snowflake asset id (with an `application_id`) | `https://cdn.discordapp.com/app-assets/<application_id>/<key>.png` |
+| anything else, including raw `http(s)` URLs, or missing | `null` |
+
+#### Trust
+
+Every field of a listening activity is chosen by the member who publishes it: any app can publish under any `application_id`, and Discord's Spotify activity can be imitated too. The only thing that can't be faked is whose presence it is. So the service limits what a frame can carry instead of trying to detect fakes:
+
+- `art_url` only ever points at `i.scdn.co`, `media.discordapp.net` or `cdn.discordapp.com`, and only for keys in the exact shape Discord delivers. The picture itself is still the member's choice.
+- `track`, `artist` and `album` have control, bidi-override and invisible characters removed and are capped at 128 characters.
+- `track_id` must be a 22-character Spotify id.
+
+Clients should still treat `listening` as untrusted plain text: render it with `textContent` (never as HTML) and restrict `img-src` to the three hosts above.
+
+Presence is deliberately a thin microservice and does no content moderation. It won't catch NSFW covers, offensive or misleading track and artist names, or text written to get past word filters. If you run Presence yourself or embed its output, that filtering is your responsibility, in the service that displays it.
 
 ## Development
 
@@ -48,7 +92,7 @@ Presence uses Redis for caching with automatic fallback to in-memory if Redis is
 
 Two things are cached:
 
-- **Spotify presence** (`presence:{user_id}`, 5 minute TTL) — populated from gateway `presence_update` events. The REST snapshot endpoint works without an active WebSocket subscriber.
+- **Listening presence** (`presence:{user_id}`, 5 minute TTL) — populated from gateway `presence_update` events. The REST snapshot endpoint works without an active WebSocket subscriber.
 - **Guild membership** (`in_server:{user_id}`) — positive entries kept for 6 hours, negative entries for 5 minutes. Maintained in real-time by the `GUILD_MEMBERS` gateway events (`guild_member_addition` / `guild_member_removal`); a cache miss falls back to a single Discord REST lookup and writes the result back. The bot needs both the `GUILD_MEMBERS` and `GUILD_PRESENCES` privileged intents enabled in the Discord developer portal.
 
 Check `/health` to see current Redis status:
