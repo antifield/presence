@@ -15,6 +15,9 @@ use warp::{Filter, Rejection, Reply, http::StatusCode};
 
 use crate::consts::{discord as discord_defaults, http as http_cfg, redis_boot, ttl, ws};
 
+/// Legacy shape of the `spotify` field, kept for clients deployed before
+/// `listening` existed. Deprecated in favour of [`ListeningActivity`]; it is
+/// filled from the same activity, including non-Spotify sources.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpotifyActivity {
     pub track: Option<String>,
@@ -25,9 +28,27 @@ pub struct SpotifyActivity {
     pub ends_at_ms: Option<i64>,
 }
 
+/// Whatever the user is listening to, from any source that reports a Discord
+/// "Listening to" activity (Spotify, SoundCloud via PreMiD, ...).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListeningActivity {
+    pub source: String,
+    pub application_id: Option<String>,
+    pub track: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub art_url: Option<String>,
+    pub track_id: Option<String>,
+    pub url: Option<String>,
+    pub started_at_ms: Option<i64>,
+    pub ends_at_ms: Option<i64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PresenceData {
     pub user_id: String,
+    pub listening: Option<ListeningActivity>,
+    /// Deprecated: use `listening`.
     pub spotify: Option<SpotifyActivity>,
     pub timestamp_ms: i64,
 }
@@ -253,6 +274,7 @@ async fn ws_loop(
 mod cache;
 mod consts;
 mod discord;
+mod listening;
 
 #[tokio::main]
 async fn main() {

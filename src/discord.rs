@@ -1,15 +1,17 @@
 use std::time::Duration;
 
 use serenity::all::{
-    ActivityType, Client, Context, EventHandler, GatewayIntents, Guild, Member, Presence, Ready,
-    ResumedEvent, UnavailableGuild, User,
+    Client, Context, EventHandler, GatewayIntents, Guild, Member, Presence, Ready, ResumedEvent,
+    UnavailableGuild, User,
 };
 use serenity::async_trait;
 use serenity::http::Http as SerenityHttp;
 use serenity::model::id::{GuildId, UserId};
 use tracing::{debug, error, info, warn};
 
-use crate::{PresenceCache, PresenceData, SpotifyActivity, UserWatchers};
+use crate::{
+    ListeningActivity, PresenceCache, PresenceData, SpotifyActivity, UserWatchers, listening,
+};
 
 pub struct Handler {
     pub cache: PresenceCache,
@@ -93,41 +95,18 @@ impl EventHandler for Handler {
 
         let user_id = new.user.id.to_string();
 
-        let raw_spotify_activity = new
-            .activities
-            .iter()
-            .find(|a| a.kind == ActivityType::Listening);
+        let raw_listening_activity = listening::pick(&new.activities);
 
-        if let Some(a) = raw_spotify_activity {
-            debug!(user_id = %user_id, activity = ?a, "spotify activity");
+        if let Some(a) = raw_listening_activity {
+            debug!(user_id = %user_id, activity = ?a, "listening activity");
         }
 
-        let spotify: Option<SpotifyActivity> = raw_spotify_activity.map(|a| {
-            let album_art_hash = a
-                .assets
-                .as_ref()
-                .and_then(|asst| asst.large_image.as_ref())
-                .map(|li| li.strip_prefix("spotify:").unwrap_or(li).to_string());
-
-            let album_art_url = album_art_hash
-                .as_ref()
-                .map(|hash| format!("https://i.scdn.co/image/{}", hash));
-
-            SpotifyActivity {
-                track: a.details.clone(),
-                artist: a.state.clone(),
-                album: a.assets.as_ref().and_then(|asst| asst.large_text.clone()),
-                album_art_url,
-                started_at_ms: a
-                    .timestamps
-                    .as_ref()
-                    .and_then(|t| t.start.map(|v| v as i64)),
-                ends_at_ms: a.timestamps.as_ref().and_then(|t| t.end.map(|v| v as i64)),
-            }
-        });
+        let listening = raw_listening_activity.map(ListeningActivity::from);
+        let spotify = listening.as_ref().map(SpotifyActivity::from);
 
         let presence = PresenceData {
             user_id: user_id.clone(),
+            listening,
             spotify,
             timestamp_ms: chrono::Utc::now().timestamp_millis(),
         };
