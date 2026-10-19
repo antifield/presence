@@ -7,28 +7,58 @@
 
 use serenity::all::{Activity, ActivityType};
 
+use crate::consts::listening as listening_cfg;
 use crate::{ListeningActivity, ListeningSource};
 
 /// Build the public URL for an activity's `assets.large_image` key.
 ///
-/// - `spotify:<id>` -> `https://i.scdn.co/image/<id>`
+/// Every field of an activity is chosen by whoever publishes it, so only keys
+/// in the exact shape Discord delivers are turned into URLs, and only on
+/// Spotify's or Discord's own image hosts:
+///
+/// - `spotify:<40 hex>` -> `https://i.scdn.co/image/<id>`
 /// - `mp:<path>` -> `https://media.discordapp.net/<path>` (Discord media proxy)
-/// - an `http(s)://` URL -> as is
-/// - any other key -> `https://cdn.discordapp.com/app-assets/<application_id>/<key>.png`
-///   (`None` without an application id)
-/// - no key -> `None`
+/// - a snowflake asset id -> `https://cdn.discordapp.com/app-assets/<application_id>/<key>.png`
+/// - anything else (including raw `http(s)` URLs, which the gateway never
+///   delivers) or no key -> `None`
 pub fn resolve_art_url(large_image: Option<&str>, application_id: Option<&str>) -> Option<String> {
-    let key = large_image.filter(|k| !k.is_empty())?;
+    let key = large_image?;
     if let Some(id) = key.strip_prefix("spotify:") {
-        return Some(format!("https://i.scdn.co/image/{id}"));
+        let valid = id.len() == 40
+            && id
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+        return valid.then(|| format!("https://i.scdn.co/image/{id}"));
     }
     if let Some(path) = key.strip_prefix("mp:") {
-        return Some(format!("https://media.discordapp.net/{path}"));
+        let valid = !path.is_empty()
+            && path
+                .chars()
+                .all(|c| c.is_ascii_graphic() && !"\"'<>\\`{}|^".contains(c));
+        return valid.then(|| format!("https://media.discordapp.net/{path}"));
     }
-    if key.starts_with("https://") || key.starts_with("http://") {
-        return Some(key.to_string());
-    }
-    application_id.map(|app_id| format!("https://cdn.discordapp.com/app-assets/{app_id}/{key}.png"))
+    let app_id = application_id?;
+    let valid = (17..=20).contains(&key.len()) && key.bytes().all(|b| b.is_ascii_digit());
+    valid.then(|| format!("https://cdn.discordapp.com/app-assets/{app_id}/{key}.png"))
+}
+
+/// Make user-supplied activity text safe to show as plain text: drop control,
+/// bidi-override and invisible characters, cap the length, and treat an empty
+/// result as missing.
+fn clean_text(text: Option<&str>) -> Option<String> {
+    let cleaned: String = text?
+        .chars()
+        .filter(|c| {
+            !c.is_control()
+                && !matches!(
+                    c,
+                    '\u{200B}' | '\u{2060}' | '\u{FEFF}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
+                )
+        })
+        .take(listening_cfg::MAX_TEXT_CHARS)
+        .collect();
+    let trimmed = cleaned.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
 /// Discord's own Spotify activity, as opposed to an app that happens to be
@@ -60,7 +90,9 @@ impl From<&Activity> for ListeningActivity {
     fn from(a: &Activity) -> Self {
         let application_id = a.application_id.map(|id| id.to_string());
         let assets = a.assets.as_ref();
-        let track_id = a.sync_id.clone().filter(|_| is_spotify(a));
+        let track_id = a.sync_id.clone().filter(|id| {
+            is_spotify(a) && id.len() == 22 && id.bytes().all(|b| b.is_ascii_alphanumeric())
+        });
 
         ListeningActivity {
             source: source(a),
@@ -69,9 +101,9 @@ impl From<&Activity> for ListeningActivity {
                 application_id.as_deref(),
             ),
             application_id,
-            track: a.details.clone(),
-            artist: a.state.clone(),
-            album: assets.and_then(|asst| asst.large_text.clone()),
+            track: clean_text(a.details.as_deref()),
+            artist: clean_text(a.state.as_deref()),
+            album: clean_text(assets.and_then(|asst| asst.large_text.as_deref())),
             url: track_id
                 .as_ref()
                 .map(|id| format!("https://open.spotify.com/track/{id}")),
@@ -159,12 +191,34 @@ mod tests {
     }
 
     #[test]
-    fn art_url_http_urls_pass_through() {
+    fn art_url_rejects_raw_http_urls() {
         for url in [
             "https://i1.sndcdn.com/artworks-t500x500.jpg",
             "http://example.com/cover.png",
         ] {
-            assert_eq!(resolve_art_url(Some(url), Some("1")), Some(url.into()));
+            assert_eq!(resolve_art_url(Some(url), Some("802958833214423081")), None);
+        }
+    }
+
+    #[test]
+    fn art_url_rejects_malformed_keys() {
+        for key in [
+            "spotify:",
+            "spotify:AB67616D0000B273BB86AA29F862C224E21B96D8",
+            "spotify:ab67616d0000b273bb86aa29f862c224e21b96d8/../x",
+            "mp:",
+            "mp:external/x\" onerror=\"alert(1)",
+            "mp:external/<script>",
+            "mp:external/a b",
+            "large_cover",
+            "123",
+            "1093518318284009472.png",
+        ] {
+            assert_eq!(
+                resolve_art_url(Some(key), Some("802958833214423081")),
+                None,
+                "{key}"
+            );
         }
     }
 
@@ -228,6 +282,32 @@ mod tests {
                 "ends_at_ms": 1766447701646_i64
             })
         );
+    }
+
+    #[test]
+    fn text_is_cleaned_and_capped() {
+        assert_eq!(
+            clean_text(Some("  evil\u{202E}gnos\u{200B}\n\u{0007} ")),
+            Some("evilgnos".into())
+        );
+        assert_eq!(
+            clean_text(Some("藍月なくる 👨‍👩‍👧")),
+            Some("藍月なくる 👨‍👩‍👧".into())
+        );
+        assert_eq!(clean_text(Some("\u{200B}\u{FEFF} ")), None);
+        assert_eq!(clean_text(None), None);
+        let long = "あ".repeat(500);
+        assert_eq!(clean_text(Some(&long)).unwrap().chars().count(), 128);
+    }
+
+    #[test]
+    fn malformed_sync_id_gets_no_track_link() {
+        let mut fake = spotify();
+        fake.sync_id = Some("x\"><img src=x>".into());
+        let listening = ListeningActivity::from(&fake);
+        assert_eq!(listening.source, ListeningSource::Spotify);
+        assert_eq!(listening.track_id, None);
+        assert_eq!(listening.url, None);
     }
 
     #[test]

@@ -48,8 +48,8 @@ Built from the user's Discord "Listening to" activity (type 2), whichever app re
 | --- | --- |
 | `source` | `"spotify"` (Discord's own Spotify activity), `"soundcloud"`, or `"other"` for any app not recognised yet |
 | `application_id` | The Discord application behind the activity, or `null` (Spotify has none) |
-| `track` / `artist` | The activity's `details` / `state` |
-| `album` | `assets.large_text`, or `null` |
+| `track` / `artist` | The activity's `details` / `state`, cleaned (see below), or `null` |
+| `album` | `assets.large_text`, cleaned, or `null` |
 | `art_url` | Cover image URL, see below, or `null` |
 | `track_id` | Spotify only: the Spotify track id (`sync_id`); otherwise `null` |
 | `url` | Spotify only: `https://open.spotify.com/track/<track_id>`; otherwise `null` |
@@ -59,11 +59,20 @@ Built from the user's Discord "Listening to" activity (type 2), whichever app re
 
 | `large_image` | `art_url` |
 | --- | --- |
-| `spotify:<id>` | `https://i.scdn.co/image/<id>` |
+| `spotify:<40 hex>` | `https://i.scdn.co/image/<id>` |
 | `mp:<path>` | `https://media.discordapp.net/<path>` |
-| `http(s)://...` | unchanged |
-| any other key | `https://cdn.discordapp.com/app-assets/<application_id>/<key>.png` |
-| missing | `null` |
+| snowflake asset id (with an `application_id`) | `https://cdn.discordapp.com/app-assets/<application_id>/<key>.png` |
+| anything else, including raw `http(s)` URLs, or missing | `null` |
+
+#### Trust
+
+Every field of a listening activity is chosen by the member who publishes it: any app can publish under any `application_id`, and Discord's Spotify activity can be imitated too. The only thing that can't be faked is whose presence it is. So the service limits what a frame can carry instead of trying to detect fakes:
+
+- `art_url` only ever points at `i.scdn.co`, `media.discordapp.net` or `cdn.discordapp.com`, and only for keys in the exact shape Discord delivers. The picture itself is still the member's choice.
+- `track`, `artist` and `album` have control, bidi-override and invisible characters removed and are capped at 128 characters.
+- `track_id` must be a 22-character Spotify id.
+
+Clients should still treat `listening` as untrusted plain text: render it with `textContent` (never as HTML) and restrict `img-src` to the three hosts above.
 
 ## Development
 
