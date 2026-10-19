@@ -121,7 +121,7 @@ mod tests {
                 "large_image": "spotify:ab67616d0000b273bb86aa29f862c224e21b96d8",
                 "large_text": "Pantheon"
             },
-            "sync_id": "4cOdK2wGLETKBW3PvgPWqT",
+            "sync_id": "049iW2TiA4H0NnGvVMibOh",
             "session_id": "0e5a6b0a3c1b8f4f1e2d3c4b5a697887",
             "party": { "id": "spotify:492731761680187403" },
             "flags": 48,
@@ -222,8 +222,8 @@ mod tests {
                 "artist": "Dance Gavin Dance",
                 "album": "Pantheon",
                 "art_url": "https://i.scdn.co/image/ab67616d0000b273bb86aa29f862c224e21b96d8",
-                "track_id": "4cOdK2wGLETKBW3PvgPWqT",
-                "url": "https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT",
+                "track_id": "049iW2TiA4H0NnGvVMibOh",
+                "url": "https://open.spotify.com/track/049iW2TiA4H0NnGvVMibOh",
                 "started_at_ms": 1766447419972_i64,
                 "ends_at_ms": 1766447701646_i64
             })

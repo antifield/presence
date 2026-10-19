@@ -23,18 +23,18 @@ The REST snapshot and every WebSocket frame share this shape:
 {
   "user_id": "492731761680187403",
   "listening": {
-    "source": "soundcloud",
-    "application_id": "802958833214423081",
-    "track": "Aitsuki Nakuru - Monochrome Butterfly",
-    "artist": "藍月なくる",
-    "album": null,
-    "art_url": "https://media.discordapp.net/external/kvJxiMrHhX9w-Ts0UnAdHQUAdN7ScthPDvAXWR92JMo/https/i1.sndcdn.com/artworks-000200210160-fa6dq4-t500x500.jpg",
-    "track_id": null,
-    "url": null,
-    "started_at_ms": 1792367951000,
-    "ends_at_ms": 1792368147000
+    "source": "spotify",
+    "application_id": null,
+    "track": "A Shoulder to Cry On",
+    "artist": "Dance Gavin Dance",
+    "album": "Pantheon",
+    "art_url": "https://i.scdn.co/image/ab67616d0000b273bb86aa29f862c224e21b96d8",
+    "track_id": "049iW2TiA4H0NnGvVMibOh",
+    "url": "https://open.spotify.com/track/049iW2TiA4H0NnGvVMibOh",
+    "started_at_ms": 1766447419972,
+    "ends_at_ms": 1766447701646
   },
-  "timestamp_ms": 1792367951995
+  "timestamp_ms": 1766447420190
 }
 ```
 
