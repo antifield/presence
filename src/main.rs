@@ -15,24 +15,21 @@ use warp::{Filter, Rejection, Reply, http::StatusCode};
 
 use crate::consts::{discord as discord_defaults, http as http_cfg, redis_boot, ttl, ws};
 
-/// Legacy shape of the `spotify` field, kept for clients deployed before
-/// `listening` existed. Deprecated in favour of [`ListeningActivity`]; it is
-/// filled from the same activity, including non-Spotify sources.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SpotifyActivity {
-    pub track: Option<String>,
-    pub artist: Option<String>,
-    pub album: Option<String>,
-    pub album_art_url: Option<String>,
-    pub started_at_ms: Option<i64>,
-    pub ends_at_ms: Option<i64>,
+/// Where a listening activity comes from. Anything not recognised yet is
+/// reported as `other`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ListeningSource {
+    Spotify,
+    Soundcloud,
+    Other,
 }
 
 /// Whatever the user is listening to, from any source that reports a Discord
 /// "Listening to" activity (Spotify, SoundCloud via PreMiD, ...).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ListeningActivity {
-    pub source: String,
+    pub source: ListeningSource,
     pub application_id: Option<String>,
     pub track: Option<String>,
     pub artist: Option<String>,
@@ -48,8 +45,6 @@ pub struct ListeningActivity {
 pub struct PresenceData {
     pub user_id: String,
     pub listening: Option<ListeningActivity>,
-    /// Deprecated: use `listening`.
-    pub spotify: Option<SpotifyActivity>,
     pub timestamp_ms: i64,
 }
 

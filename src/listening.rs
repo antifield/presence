@@ -7,7 +7,7 @@
 
 use serenity::all::{Activity, ActivityType};
 
-use crate::{ListeningActivity, SpotifyActivity};
+use crate::{ListeningActivity, ListeningSource};
 
 /// Build the public URL for an activity's `assets.large_image` key.
 ///
@@ -37,6 +37,16 @@ fn is_spotify(activity: &Activity) -> bool {
     activity.name == "Spotify" && activity.sync_id.is_some()
 }
 
+fn source(activity: &Activity) -> ListeningSource {
+    if is_spotify(activity) {
+        ListeningSource::Spotify
+    } else if activity.name.eq_ignore_ascii_case("SoundCloud") {
+        ListeningSource::Soundcloud
+    } else {
+        ListeningSource::Other
+    }
+}
+
 /// Pick the listening activity to report: real Spotify first, then the one
 /// that started most recently.
 pub fn pick(activities: &[Activity]) -> Option<&Activity> {
@@ -53,7 +63,7 @@ impl From<&Activity> for ListeningActivity {
         let track_id = a.sync_id.clone().filter(|_| is_spotify(a));
 
         ListeningActivity {
-            source: a.name.clone(),
+            source: source(a),
             art_url: resolve_art_url(
                 assets.and_then(|asst| asst.large_image.as_deref()),
                 application_id.as_deref(),
@@ -71,19 +81,6 @@ impl From<&Activity> for ListeningActivity {
                 .as_ref()
                 .and_then(|t| t.start.map(|v| v as i64)),
             ends_at_ms: a.timestamps.as_ref().and_then(|t| t.end.map(|v| v as i64)),
-        }
-    }
-}
-
-impl From<&ListeningActivity> for SpotifyActivity {
-    fn from(l: &ListeningActivity) -> Self {
-        SpotifyActivity {
-            track: l.track.clone(),
-            artist: l.artist.clone(),
-            album: l.album.clone(),
-            album_art_url: l.art_url.clone(),
-            started_at_ms: l.started_at_ms,
-            ends_at_ms: l.ends_at_ms,
         }
     }
 }
@@ -199,7 +196,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&listening).unwrap(),
             json!({
-                "source": "SoundCloud",
+                "source": "soundcloud",
                 "application_id": "802958833214423081",
                 "track": "Aitsuki Nakuru - Monochrome Butterfly",
                 "artist": "藍月なくる",
@@ -214,28 +211,12 @@ mod tests {
     }
 
     #[test]
-    fn soundcloud_legacy_spotify_frame_has_resolved_art() {
-        let spotify = SpotifyActivity::from(&ListeningActivity::from(&soundcloud()));
-        assert_eq!(
-            serde_json::to_value(&spotify).unwrap(),
-            json!({
-                "track": "Aitsuki Nakuru - Monochrome Butterfly",
-                "artist": "藍月なくる",
-                "album": null,
-                "album_art_url": SOUNDCLOUD_ART_URL,
-                "started_at_ms": 1792367951000_i64,
-                "ends_at_ms": 1792368147000_i64
-            })
-        );
-    }
-
-    #[test]
     fn spotify_listening_frame() {
         let listening = ListeningActivity::from(&spotify());
         assert_eq!(
             serde_json::to_value(&listening).unwrap(),
             json!({
-                "source": "Spotify",
+                "source": "spotify",
                 "application_id": null,
                 "track": "A Shoulder to Cry On",
                 "artist": "Dance Gavin Dance",
@@ -250,25 +231,19 @@ mod tests {
     }
 
     #[test]
-    fn spotify_legacy_frame_unchanged() {
-        let spotify = SpotifyActivity::from(&ListeningActivity::from(&spotify()));
+    fn unrecognised_app_is_other_source() {
+        let listening = ListeningActivity::from(&listening_at("Apple Music", Some(1)));
+        assert_eq!(listening.source, ListeningSource::Other);
         assert_eq!(
-            serde_json::to_value(&spotify).unwrap(),
-            json!({
-                "track": "A Shoulder to Cry On",
-                "artist": "Dance Gavin Dance",
-                "album": "Pantheon",
-                "album_art_url": "https://i.scdn.co/image/ab67616d0000b273bb86aa29f862c224e21b96d8",
-                "started_at_ms": 1766447419972_i64,
-                "ends_at_ms": 1766447701646_i64
-            })
+            serde_json::to_value(listening.source).unwrap(),
+            json!("other")
         );
     }
 
     #[test]
-    fn app_named_spotify_without_sync_id_gets_no_track_link() {
+    fn app_named_spotify_without_sync_id_is_other_with_no_track_link() {
         let listening = ListeningActivity::from(&listening_at("Spotify", Some(1)));
-        assert_eq!(listening.source, "Spotify");
+        assert_eq!(listening.source, ListeningSource::Other);
         assert_eq!(listening.track_id, None);
         assert_eq!(listening.url, None);
     }

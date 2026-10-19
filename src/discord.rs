@@ -9,9 +9,7 @@ use serenity::http::Http as SerenityHttp;
 use serenity::model::id::{GuildId, UserId};
 use tracing::{debug, error, info, warn};
 
-use crate::{
-    ListeningActivity, PresenceCache, PresenceData, SpotifyActivity, UserWatchers, listening,
-};
+use crate::{ListeningActivity, PresenceCache, PresenceData, UserWatchers, listening};
 
 pub struct Handler {
     pub cache: PresenceCache,
@@ -101,13 +99,9 @@ impl EventHandler for Handler {
             debug!(user_id = %user_id, activity = ?a, "listening activity");
         }
 
-        let listening = raw_listening_activity.map(ListeningActivity::from);
-        let spotify = listening.as_ref().map(SpotifyActivity::from);
-
         let presence = PresenceData {
             user_id: user_id.clone(),
-            listening,
-            spotify,
+            listening: raw_listening_activity.map(ListeningActivity::from),
             timestamp_ms: chrono::Utc::now().timestamp_millis(),
         };
 

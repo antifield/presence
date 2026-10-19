@@ -23,7 +23,7 @@ The REST snapshot and every WebSocket frame share this shape:
 {
   "user_id": "492731761680187403",
   "listening": {
-    "source": "SoundCloud",
+    "source": "soundcloud",
     "application_id": "802958833214423081",
     "track": "Aitsuki Nakuru - Monochrome Butterfly",
     "artist": "藍月なくる",
@@ -34,19 +34,11 @@ The REST snapshot and every WebSocket frame share this shape:
     "started_at_ms": 1792367951000,
     "ends_at_ms": 1792368147000
   },
-  "spotify": {
-    "track": "Aitsuki Nakuru - Monochrome Butterfly",
-    "artist": "藍月なくる",
-    "album": null,
-    "album_art_url": "https://media.discordapp.net/external/kvJxiMrHhX9w-Ts0UnAdHQUAdN7ScthPDvAXWR92JMo/https/i1.sndcdn.com/artworks-000200210160-fa6dq4-t500x500.jpg",
-    "started_at_ms": 1792367951000,
-    "ends_at_ms": 1792368147000
-  },
   "timestamp_ms": 1792367951995
 }
 ```
 
-Both `listening` and `spotify` are `null` when the user isn't listening to anything.
+`listening` is `null` when the user isn't listening to anything.
 
 #### `listening`
 
@@ -54,7 +46,7 @@ Built from the user's Discord "Listening to" activity (type 2), whichever app re
 
 | Field | Value |
 | --- | --- |
-| `source` | The activity's `name`, e.g. `"Spotify"`, `"SoundCloud"` |
+| `source` | `"spotify"` (Discord's own Spotify activity), `"soundcloud"`, or `"other"` for any app not recognised yet |
 | `application_id` | The Discord application behind the activity, or `null` (Spotify has none) |
 | `track` / `artist` | The activity's `details` / `state` |
 | `album` | `assets.large_text`, or `null` |
@@ -72,11 +64,6 @@ Built from the user's Discord "Listening to" activity (type 2), whichever app re
 | `http(s)://...` | unchanged |
 | any other key | `https://cdn.discordapp.com/app-assets/<application_id>/<key>.png` |
 | missing | `null` |
-
-#### `spotify` (deprecated)
-
-> [!WARNING]
-> `spotify` is deprecated in favour of `listening` and kept only for clients that already read it. It is filled from the same activity as `listening`, including non-Spotify sources, with `album_art_url` equal to `listening.art_url`.
 
 ## Development
 
